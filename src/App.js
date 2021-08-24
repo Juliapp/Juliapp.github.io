@@ -9,7 +9,7 @@ function App() {
         <p>
           It seems like you want see some spoiler hun?
           <br />
-          Stay tune to see what the heck is going to happen
+          Stay tuned to see what the heck is going to happen
         </p>
         <a
           className="App-link"
