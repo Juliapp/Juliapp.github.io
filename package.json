@@ -2,13 +2,13 @@
   "name": "svelte-app",
   "version": "1.0.0",
   "private": true,
-  "homepage": "https://Juliapp.github.io/Juliapp.github.io",
+  "homepage": "https://Juliapp.github.io/",
   "scripts": {
     "build": "rollup -c",
     "dev": "rollup -c -w",
     "start": "sirv public --no-clear",
     "predeploy": "npm run build",
-    "deploy": "gh-pages -d build"
+    "deploy": "gh-pages -d public"
   },
   "devDependencies": {
     "@rollup/plugin-commonjs": "^17.0.0",
