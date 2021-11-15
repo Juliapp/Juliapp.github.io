@@ -1,16 +1,36 @@
 <script>
-	// export let name = "World";
+    import { 
+        Fullpage,
+        FullpageSection,
+        FullpageSlide
+    } from 'svelte-fullpage';
+
+		import Hero from './pages/Hero.svelte'
+
+    //Optional, include all titles of your sections, this is also used as number that indicate count of sections
+    const sections = [
+        'Home',
+        'History',
+        'Present',
+        'Future'
+    ];
+    
+    //Same mechanics as in sections
+    const slides = [
+        '1982-1993',
+        '1993-2006',
+        '2006-present'
+    ];
+
+
 </script>
 
 <main>
-	<!-- <section>
-		<h1>Códigos geniais</h1>
-		<h1>Softwares incíveis.</h1>
-	</section>
-	<section>
-		<h3>Olá, eu sou Juliana Pinto, estudante e</h3>
-		<h3>Desenvolvedora de software Full Stack</h3>
-	</section> -->
+	<Fullpage {sections} arrows>
+    <FullpageSection center>
+        <Hero/>
+    </FullpageSection>
+	</Fullpage>
 </main>
 
 
@@ -18,12 +38,14 @@
 	main {
 		width: 100vw;
 		height: 100vh;
-		background-image: url('./assets/bg.png');
+		background-image: url('./assets/bgnonoise.png');
+		/* background-image: url('./assets/bg.png'); */
 		background-size: 100%;
 	}
 
-	section {
-		font-family: Montserrat sans-serif;
-	}
+	* :global(.svelte-fp-flexbox-center.svelte-l4liqa) {
+    justify-content: flex-start;
+		padding: 60px;
+  }
 
 </style>
