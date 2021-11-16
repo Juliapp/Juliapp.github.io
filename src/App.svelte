@@ -1,4 +1,12 @@
 <script>
+	import {setContext} from 'svelte'
+	let hovered = false;
+	function setHovered(value){
+		hovered = value;
+	}
+	setContext('setHovered', setHovered)
+
+
     import { 
         Fullpage,
         FullpageSection,
@@ -6,6 +14,16 @@
     } from 'svelte-fullpage';
 
 		import Hero from './pages/Hero.svelte'
+		import Skills from './pages/Skills.svelte';
+
+
+		const bgs = [
+			'./assets/bgnonoise.png',
+			'./assets/bg.png',
+		]
+		
+		let indexBg = 0;
+
 
     //Optional, include all titles of your sections, this is also used as number that indicate count of sections
     const sections = [
@@ -22,30 +40,59 @@
         '2006-present'
     ];
 
-
 </script>
-
-<main>
+ 
+<!-- <main class="bg-image" style="background-image: url('{bgs[hovered ? 1 : indexBg]}');"> -->
+<main class="bg-image" style="--bg-img: url({bgs[hovered ? 1 : indexBg]})">
+	<main class="bg-dotted-grid">
 	<Fullpage {sections} arrows>
-    <FullpageSection center>
+    <FullpageSection center >
         <Hero/>
     </FullpageSection>
+		<FullpageSection center>
+			<Skills />
+	</FullpageSection>
 	</Fullpage>
+</main>
 </main>
 
 
 <style>
-	main {
+	.bg-image {
 		width: 100vw;
 		height: 100vh;
-		background-image: url('./assets/bgnonoise.png');
+		background-color: #000;
+		background-image: var(--bg-img);
+		-webkit-background-size: cover;
+ 		-moz-background-size: cover;
+  	-o-background-size: cover;
+  	background-size: cover;
+		/* background-image: radial-gradient(circle at 1px 1px, black 1px, transparent 0); */
+		object-fit: cover;
 		/* background-image: url('./assets/bg.png'); */
-		background-size: 100%;
+		/* background-size: 100%; */
+		transition: cubic-bezier(0.075, 0.82, 0.165, 1);
+	}
+
+	.bg-dotted-grid {
+		width: 100vw;
+		height: 100vh;
+		background-image: radial-gradient(circle at 1px 1px, #9671BB33 1px, transparent 0);
+  	background-size: 40px 40px;
+	}
+	main::before{
+		width: max-content;
+		height: max-content;
+		background-color: red;
 	}
 
 	* :global(.svelte-fp-flexbox-center.svelte-l4liqa) {
     justify-content: flex-start;
-		padding: 60px;
+		padding: 0 60px;
   }
 
 </style>
+
+
+<!-- [14:25, 15/11/2021] Juli: https://stackoverflow.com/questions/57174373/can-i-set-svelte-style-css-attribute-values-using-variables-passed-in-to-a-compo
+[14:25, 15/11/2021] Juli: https://svelte.dev/repl/5fab983a191d459da149ef55e7962cf8?version=3.2.1 -->

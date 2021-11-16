@@ -20,6 +20,7 @@
   }
 
   .hero-presentation {
+    font-size: 20px;
     color: #5B5D79
   }
 

@@ -1,3 +1,21 @@
+<script>
+  import {getContext} from 'svelte'
+  let setHovered = getContext('setHovered')
+
+  function moseoverhandler(e) {
+    // hovered = true;
+    setHovered(true)
+    // console.log(true);
+  }
+
+  function moseouthandler(e) {
+    setHovered(false)
+    // hovered = false;
+    // console.log(false);
+  }
+
+</script>
+
 <div class="slogan-container">
   <strong class="braces">
     {"</>"}
@@ -5,7 +23,9 @@
 
   <section class="slogan">
     <h1>Smart code,</h1>
-    <h1 class="second-part"><strong>awesome</strong> software</h1>
+    <h1 class="second-part">
+      <strong on:mouseover={moseoverhandler} on:focus on:mouseout={moseouthandler} on:blur>awesome</strong> 
+      software</h1>
   </section>
 
 </div>
