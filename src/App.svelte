@@ -7,15 +7,36 @@
 	setContext('setHovered', setHovered)
 
 
-    import { 
-        Fullpage,
-        FullpageSection,
-        FullpageSlide
-    } from 'svelte-fullpage';
+	import { 
+			Fullpage,
+			FullpageSection,
+			FullpageSlide
+	} from 'svelte-fullpage';
 
-		import Hero from './pages/Hero.svelte'
-		import Skills from './pages/Skills.svelte';
+	import Hero from './pages/Hero.svelte'
+	import Skills from './pages/Skills.svelte';
 
+	import Granim from 'granim'
+	import 'granim/dist/granim.min.js'
+	import { onMount } from 'svelte';
+
+	onMount(() => {
+
+		var granimInstance = new Granim({
+			element: '#bg-image',
+			name: 'granim',
+			opacity: [0.5, 0.5],
+			states : {
+				"default-state": {
+					gradients: [
+						['#834D9B', '#D04ED6'],
+						['#1CD8D2', '#93EDC7']
+					]
+				}
+			}
+		});
+		
+	})
 
 		const bgs = [
 			'./assets/bgnonoise.png',
@@ -43,18 +64,30 @@
 </script>
  
 <!-- <main class="bg-image" style="background-image: url('{bgs[hovered ? 1 : indexBg]}');"> -->
-<main class="bg-image" style="--bg-img: url({bgs[hovered ? 1 : indexBg]})">
+<!-- <main class="bg-image" id="bg-image" style="--bg-img: url({bgs[hovered ? 1 : indexBg]})">
 	<main class="bg-dotted-grid">
-	<Fullpage {sections} arrows>
-    <FullpageSection center >
-        <Hero/>
-    </FullpageSection>
-		<FullpageSection center>
-			<Skills />
-	</FullpageSection>
-	</Fullpage>
-</main>
-</main>
+		<Fullpage {sections} arrows>
+			<FullpageSection center >
+					<Hero/>
+			</FullpageSection>
+			<FullpageSection center>
+				<Skills />
+		</FullpageSection>
+		</Fullpage>
+	</main>
+</main> -->
+<canvas class="bg-image" id="bg-image" style="--bg-img: url({bgs[hovered ? 1 : indexBg]})">
+	<main class="bg-dotted-grid">
+		<Fullpage {sections} arrows>
+			<FullpageSection center >
+					<Hero/>
+			</FullpageSection>
+			<FullpageSection center>
+				<Skills />
+		</FullpageSection>
+		</Fullpage>
+	</main>
+</canvas>
 
 
 <style>
@@ -62,7 +95,7 @@
 		width: 100vw;
 		height: 100vh;
 		background-color: #000;
-		background-image: var(--bg-img);
+		/* background-image: var(--bg-img); */
 		-webkit-background-size: cover;
  		-moz-background-size: cover;
   	-o-background-size: cover;
@@ -91,6 +124,16 @@
 		padding: 0 60px;
   }
 
+	#canvas-image {
+    position: absolute;
+    display: block;
+    width: 100%;
+    height: 100%;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+	}
 </style>
 
 

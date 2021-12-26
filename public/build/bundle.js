@@ -3473,10 +3473,975 @@ var app = (function () {
     	}
     }
 
+    var animateColors = function(timestamp) {
+    	var wasWindowIdled = timestamp - this.previousTimeStamp > 100;
+    	var isLoop = this.states[this.activeState].loop !== undefined ? this.states[this.activeState].loop : true;
+    	var progressPercent, isLooping, nextGradient;
+
+    	// If tab was inactive then resumed, reset the previous timestamp
+    	if (this.previousTimeStamp === null || wasWindowIdled) {
+    		this.previousTimeStamp = timestamp;
+    	}
+
+    	// Compute progress and save the timestamp
+    	this.progress = this.progress + (timestamp - this.previousTimeStamp);
+    	progressPercent = (this.progress / this.activetransitionSpeed * 100).toFixed(2);
+    	this.previousTimeStamp = timestamp;
+
+    	// Set the new gradient colors in a property
+    	this.refreshColorsAndPos(progressPercent);
+
+    	// Continue the animation or prepare for the next one
+    	if (progressPercent < 100) {
+    		this.animation = requestAnimationFrame(this.animateColors.bind(this));
+
+    	} else {
+    		// if the current animation index is inferior to the penultimate gradient
+    		// or to the last gradient with the loop mode activated
+    		if (this.channelsIndex < this.states[this.activeState].gradients.length - 2 || isLoop) {
+
+    			// Set the active transition speed to the active state one after changing state
+    			if (this.isChangingState) {
+    				this.activetransitionSpeed = this.states[this.activeState].transitionSpeed || 5000;
+    				this.isChangingState = false;
+    			}
+
+    			// Resetting properties
+    			this.previousTimeStamp = null;
+    			this.progress = 0;
+    			this.channelsIndex++;
+    			isLooping = false;
+
+    			// If it's going to loop or if it's the transition after the loop
+    			if (this.channelsIndex === this.states[this.activeState].gradients.length - 1) {
+    				isLooping = true;
+    				
+    			} else if (this.channelsIndex === this.states[this.activeState].gradients.length) {
+    				this.channelsIndex = 0;
+    			}
+
+    			// Checking the next gradient to send in args of an event and a callback
+    			nextGradient = this.states[this.activeState].gradients[this.channelsIndex + 1] === undefined ?
+    				this.states[this.activeState].gradients[0] :
+    				this.states[this.activeState].gradients[this.channelsIndex + 1];
+
+    			// Compute the colors for the transition and render a new frame
+    			this.setColors();
+    			this.animation = requestAnimationFrame(this.animateColors.bind(this));
+    			
+    			// Callback and Event
+    			if (this.callbacks.onGradientChange) {
+    				this.callbacks.onGradientChange({
+    					isLooping: isLooping,
+    					colorsFrom: this.states[this.activeState].gradients[this.channelsIndex],
+    					colorsTo: nextGradient,
+    					activeState: this.activeState
+    				});
+    			}
+
+    			this.canvas.dispatchEvent(this.events.gradientChange({
+    				isLooping: isLooping,
+    				colorsFrom: this.states[this.activeState].gradients[this.channelsIndex],
+    				colorsTo: nextGradient,
+    				activeState: this.activeState
+    			}));
+
+    		// Else if it was the last gradient on the list and the loop mode is off
+    		} else {
+    			cancelAnimationFrame(this.animation);
+
+    			// Callback and Event
+    			if (this.callbacks.onEnd) this.callbacks.onEnd();
+    			this.canvas.dispatchEvent(new CustomEvent('granim:end'));
+    		}
+    	}
+    };
+
+    var changeBlendingMode = function(newBlendingMode) {
+    	this.context.clearRect(0, 0, this.x1, this.y1);
+    	this.context.globalCompositeOperation =
+    		this.image.blendingMode = newBlendingMode;
+    	this.validateInput('blendingMode');
+    	if (this.isPaused) this.refreshColorsAndPos();
+    };
+
+    var changeDirection = function(newDirection) {
+    	this.context.clearRect(0, 0, this.x1, this.y1);
+    	this.direction = newDirection;
+    	this.validateInput('direction');
+    	if (this.isPaused) this.refreshColorsAndPos();
+    };
+
+    var changeState = function(newState) {
+    	var _this = this;
+
+    	// Prevent transitioning to the same state
+    	if (this.activeState === newState) {
+    		return;
+    	}
+
+    	// Setting the good properties for the transition
+    	if (!this.isPaused) {
+    		this.isPaused = true;
+    		this.pause();
+    	}
+
+    	this.channelsIndex = -1;
+    	this.activetransitionSpeed = this.stateTransitionSpeed;
+    	this.activeColorsDiff = [];
+    	this.activeColorsPosDiff = [];
+    	this.activeColors = this.getCurrentColors();
+    	this.activeColorsPos = this.getCurrentColorsPos();
+    	this.progress = 0;
+    	this.previousTimeStamp = null;
+    	this.isChangingState = true;
+
+    	// Compute the gradient color and pos diff between the last frame gradient
+    	// and the first one of the new state
+    	this.states[newState].gradients[0].forEach(function(gradientColor, i, arr) {
+    		var nextColors = _this.convertColorToRgba(_this.getColor(gradientColor));
+    		var nextColorsPos = _this.getColorPos(gradientColor, i);
+    		var colorDiff = _this.getColorDiff(_this.activeColors[i], nextColors);
+    		var colorPosDiff = _this.getColorPosDiff(_this.activeColorsPos[i], nextColorsPos);
+    		_this.activeColorsDiff.push(colorDiff);
+    		_this.activeColorsPosDiff.push(colorPosDiff);
+    	});
+
+    	// Start the animation
+    	this.activeState = newState;
+    	this.play();
+    };
+
+    var clear = function() {
+    	if (!this.isPaused) {
+    		cancelAnimationFrame(this.animation);
+
+    	} else {
+    		this.isPaused = false;
+    	}
+    	this.isCleared = true;
+    	this.context.clearRect(0, 0, this.x1, this.y1);
+    };
+
+    var regex = {
+    	hexa: /^#(?:[0-9a-fA-F]{3}){1,2}$/,
+    	rgba: /^rgba\((\d{1,3}), ?(\d{1,3}), ?(\d{1,3}), ?(.?\d{1,3})\)$/,
+    	rgb: /^rgb\((\d{1,3}), ?(\d{1,3}), ?(\d{1,3})\)$/,
+    	hsla: /^hsla\((\d{1,3}), ?(\d{1,3})%, ?(\d{1,3})%, ?(.?\d{1,3})\)$/,
+    	hsl: /^hsl\((\d{1,3}), ?(\d{1,3})%, ?(\d{1,3})%\)$/
+    }, match;
+
+    var convertColorToRgba = function(color) {
+    	switch(identifyColorType(color)) {
+    		default:
+    			this.triggerError('colorType');
+
+    		case 'hexa':
+    			return hexToRgba(color);
+
+    		case 'rgba':
+    			return [
+    				parseInt(match[1], 10),
+    				parseInt(match[2], 10),
+    				parseInt(match[3], 10),
+    				parseFloat(match[4])
+    			];
+
+    		case 'rgb':
+    			return [
+    				parseInt(match[1], 10),
+    				parseInt(match[2], 10),
+    				parseInt(match[3], 10),
+    				1
+    			];
+
+    		case 'hsla':
+    			return hslaToRgb(
+    				parseInt(match[1], 10) / 360,
+    				parseInt(match[2], 10) / 100,
+    				parseInt(match[3], 10) / 100,
+    				parseFloat(match[4])
+    			);
+
+    		case 'hsl':
+    			return hslaToRgb(
+    				parseInt(match[1], 10) / 360,
+    				parseInt(match[2], 10) / 100,
+    				parseInt(match[3], 10) / 100,
+    				1
+    			);
+    	}
+    };
+
+    function identifyColorType(color) {
+    	var colorTypes = Object.keys(regex);
+    	var i = 0;
+    	for (i; i < colorTypes.length; i++) {
+    		match = regex[colorTypes[i]].exec(color);
+    		if (match) return colorTypes[i];
+    	}
+    	return false;
+    }
+
+    function hexToRgba(hex) {
+    	// Expand shorthand form (e.g. '03F') to full form (e.g. '0033FF')
+    	var shorthandRegex = /^#?([a-f\d])([a-f\d])([a-f\d])$/i;
+    	hex = hex.replace(shorthandRegex, function(m, r, g, b) {
+    		return r + r + g + g + b + b;
+    	});
+    	var result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    	return result ? [
+    		parseInt(result[1], 16),
+    		parseInt(result[2], 16),
+    		parseInt(result[3], 16),
+    		1
+    	] : null;
+    }
+
+    function hue2rgb(p, q, t) {
+    	if (t < 0) t += 1;
+    	if (t > 1) t -= 1;
+    	if (t < 1 / 6) return p + (q - p) * 6 * t;
+    	if (t < 1 / 2) return q;
+    	if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    	return p;
+    }
+
+    function hslaToRgb(h, s, l, a) {
+    	var r, g, b, q, p;
+    	if (s === 0) {
+    		r = g = b = l; // achromatic
+    	} else {
+    		q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    		p = 2 * l - q;
+    		r = hue2rgb(p, q, h + 1/3);
+    		g = hue2rgb(p, q, h);
+    		b = hue2rgb(p, q, h - 1/3);
+    	}
+    	return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255), a];
+    }
+
+    var destroy = function() {
+    	this.onResize('removeListeners');
+    	this.onScroll('removeListeners');
+    	this.clear();
+    };
+
+    var eventPolyfill = function() {
+    	if ( typeof window.CustomEvent === 'function' ) return;
+
+    	function CustomEvent(event, params) {
+    		params = params || { bubbles: false, cancelable: false, detail: undefined };
+    		var evt = document.createEvent('CustomEvent');
+    		evt.initCustomEvent(event, params.bubbles, params.cancelable, params.detail);
+    		return evt;
+    	}
+
+    	CustomEvent.prototype = window.Event.prototype;
+
+    	window.CustomEvent = CustomEvent;
+    };
+
+    var getColor = function(gradientColor) {
+    	if (typeof gradientColor === 'string') {
+    		return gradientColor;
+
+    	} else if (typeof gradientColor === 'object' && gradientColor.color) {
+    		return gradientColor.color;
+
+    	} else {
+    		this.triggerError('gradient.color');
+    	}
+    };
+
+    var getColorDiff = function(colorA, colorB) {
+    	var i = 0;
+    	var colorDiff = [];
+
+    	for (i; i < 4; i++) {
+    		colorDiff.push(colorB[i] - colorA[i]);
+    	}
+
+    	return colorDiff;
+    };
+
+    var getColorPos = function(gradientColor, i) {
+    	if (typeof gradientColor === 'object' && gradientColor.pos) {
+    		return gradientColor.pos;
+
+    	} else {
+    		// Ensure first and last position to be 0 and 100
+    		return parseFloat(!i ? 0 : ((1 / (this.gradientLength - 1)) * i).toFixed(2));
+    	}
+    };
+
+    var getColorPosDiff = function(posA, posB) {
+    	return posB - posA;
+    };
+
+    var getCurrentColors = function() {
+    	var i, j;
+    	var currentColors = [];
+
+    	for (i = 0; i < this.currentColors.length; i++) {
+    		currentColors.push([]);
+
+    		for (j = 0; j < 4; j++) {
+    			currentColors[i].push(this.currentColors[i][j]);
+    		}
+    	}
+
+    	// Return a deep copy of the current colors
+    	return currentColors;
+    };
+
+    var getCurrentColorsPos = function() {
+    	var currentColorsPos = [], i;
+
+    	for (i = 0; i < this.currentColorsPos.length; i++) {
+    		currentColorsPos.push(this.currentColorsPos[i]);
+    	}
+
+    	// Return a deep copy of the current colors
+    	return currentColorsPos;
+    };
+
+    var getDimensions = function() {
+    	this.x1 = this.canvas.offsetWidth;
+    	this.y1 = this.canvas.offsetHeight;
+    };
+
+    var getElement = function(element) {
+    	if (element instanceof HTMLCanvasElement) {
+    		this.canvas = element;
+
+    	} else if (typeof element === 'string') {
+    		this.canvas = document.querySelector(element);
+
+    	} else {
+    		throw new Error('The element you used is neither a String, nor a HTMLCanvasElement');
+    	}
+
+    	if (!this.canvas) {
+    		throw new Error('`' + element + '` could not be found in the DOM');
+    	}
+    };
+
+    var getLightness = function() {
+    	var currentColors = this.getCurrentColors();
+    	var gradientAverage = null;
+    	var lightnessAverage, i;
+    	var colorsAverage = currentColors.map(function(el) {
+    		// Compute the average lightness of each color
+    		// in the current gradient
+    		return Math.max(el[0], el[1], el[2]);
+    	});
+
+    	for (i = 0; i < colorsAverage.length; i++) {
+    		// Add all the average lightness of each color
+    		gradientAverage = gradientAverage === null ?
+    			colorsAverage[i] : gradientAverage + colorsAverage[i];
+
+    		if (i === colorsAverage.length - 1) {
+    			// if it's the last lightness average
+    			// divide it by the total length to
+    			// have the global average lightness
+    			lightnessAverage = Math.round(gradientAverage / (i + 1));
+    		}
+    	}
+
+    	return lightnessAverage >= 128 ? 'light' : 'dark';
+    };
+
+    var makeGradient = function() {
+    	var gradient = this.setDirection();
+    	var elToSetClassOnClass = document.querySelector(this.elToSetClassOn).classList;
+    	var i = 0;
+    	this.context.clearRect(0, 0, this.x1, this.y1);
+
+    	if (this.image) {
+    		this.context.drawImage(
+    			this.imageNode,
+    			this.imagePosition.x,
+    			this.imagePosition.y,
+    			this.imagePosition.width,
+    			this.imagePosition.height
+    		);
+    	}
+
+    	for (i; i < this.currentColors.length; i++) {
+    		gradient.addColorStop(this.currentColorsPos[i], 'rgba(' +
+    			this.currentColors[i][0] + ', ' +
+    			this.currentColors[i][1] + ', ' +
+    			this.currentColors[i][2] + ', ' +
+    			this.currentColors[i][3] + ')'
+    		);
+    	}
+
+    	if (this.name) {
+    		if (this.getLightness() === 'light') {
+    			elToSetClassOnClass.remove(this.name + '-dark');
+    			elToSetClassOnClass.add(this.name + '-light');
+
+    		} else {
+    			elToSetClassOnClass.remove(this.name + '-light');
+    			elToSetClassOnClass.add(this.name + '-dark');
+    		}
+    	}
+
+    	this.context.fillStyle = gradient;
+    	this.context.fillRect(0, 0, this.x1, this.y1);
+    };
+
+    var onResize = function(type) {
+    	if (type === 'removeListeners') {
+    		window.removeEventListener('resize', this.setSizeAttributesNameSpace);
+    		return;
+    	}
+
+    	window.addEventListener('resize', this.setSizeAttributesNameSpace);
+    };
+
+    var onScroll = function(type) {
+    	if (type === 'removeListeners') {
+    		window.removeEventListener('scroll', this.pauseWhenNotInViewNameSpace);
+    		return;
+    	}
+
+    	window.addEventListener('scroll', this.pauseWhenNotInViewNameSpace);
+    	this.pauseWhenNotInViewNameSpace();
+    };
+
+    var pause = function(state) {
+    	var isPausedBecauseNotInView = state === 'isPausedBecauseNotInView';
+    	if (this.isCleared) return;
+    	if (!isPausedBecauseNotInView) this.isPaused = true;
+    	cancelAnimationFrame(this.animation);
+    	this.animating = false;
+    };
+
+    var pauseWhenNotInView = function() {
+    	var _this = this;
+    	if (this.scrollDebounceTimeout) clearTimeout(this.scrollDebounceTimeout);
+
+    	this.scrollDebounceTimeout = setTimeout(function() {
+    		var elPos = _this.canvas.getBoundingClientRect();
+    		_this.isCanvasInWindowView = !(elPos.bottom < 0 || elPos.right < 0 ||
+    			elPos.left > window.innerWidth || elPos.top > window.innerHeight);
+
+    		if (_this.isCanvasInWindowView) {
+    			if (!_this.isPaused || _this.firstScrollInit) {
+    				if (_this.image && !_this.isImgLoaded) {return;}
+    				_this.isPausedBecauseNotInView = false;
+    				_this.play('isPlayedBecauseInView');
+    				_this.firstScrollInit = false;
+    			}
+
+    		} else {
+    			if (!_this.image && _this.firstScrollInit) {
+    				_this.refreshColorsAndPos();
+    				_this.firstScrollInit = false;
+    			}
+
+    			if (!_this.isPaused && !_this.isPausedBecauseNotInView) {
+    				_this.isPausedBecauseNotInView = true;
+    				_this.pause('isPausedBecauseNotInView');
+    			}
+    		}
+    	}, this.scrollDebounceThreshold);
+    };
+
+    var play = function(state) {
+    	var isPlayedBecauseInView = state === 'isPlayedBecauseInView';
+    	if (!isPlayedBecauseInView) this.isPaused = false;
+    	this.isCleared = false;
+    	if (!this.animating) {
+    		this.animation = requestAnimationFrame(this.animateColors.bind(this));
+    		this.animating = true;
+    	}
+    };
+
+    var prepareImage = function() {
+    	var _this = this;
+
+    	if (!this.imagePosition) {
+    		this.imagePosition = { x: 0, y: 0, width: 0, height: 0 };
+    	}
+
+    	if (this.image.blendingMode) {
+    		this.context.globalCompositeOperation = this.image.blendingMode;
+    	}
+
+    	if (this.imageNode) {
+    		setImagePosition();
+    		return;
+    	}
+
+    	this.imageNode = new Image();
+    	this.imageNode.onerror = function() {
+    		throw new Error('Granim: The image source is invalid.');
+    	};
+    	this.imageNode.onload = function() {
+    		_this.imgOriginalWidth = _this.imageNode.width;
+    		_this.imgOriginalHeight = _this.imageNode.height;
+    		setImagePosition();
+    		_this.refreshColorsAndPos();
+    		if (!_this.isPausedWhenNotInView || _this.isCanvasInWindowView) {
+    			_this.animation = requestAnimationFrame(_this.animateColors.bind(_this));
+    		}
+    		_this.isImgLoaded = true;
+    	};
+    	this.imageNode.src = this.image.source;
+
+    	function setImagePosition() {
+    		var i, currentAxis;
+
+    		for (i = 0; i < 2; i++) {
+    			currentAxis = !i ? 'x' : 'y';
+    			setImageAxisPosition(currentAxis);
+    		}
+
+    		function setImageAxisPosition(axis) {
+    			var canvasWidthOrHeight = _this[axis + '1'];
+    			var imgOriginalWidthOrHeight = _this[axis === 'x' ? 'imgOriginalWidth' : 'imgOriginalHeight'];
+    			var imageAlignIndex = axis === 'x' ? _this.image.position[0] : _this.image.position[1];
+    			var imageAxisPosition;
+    			switch(imageAlignIndex) {
+    				case 'center':
+    					imageAxisPosition = imgOriginalWidthOrHeight > canvasWidthOrHeight
+    						? -(imgOriginalWidthOrHeight - canvasWidthOrHeight) / 2
+    						: (canvasWidthOrHeight - imgOriginalWidthOrHeight) / 2;
+    					_this.imagePosition[axis] = imageAxisPosition;
+    					_this.imagePosition[axis === 'x' ? 'width' : 'height'] = imgOriginalWidthOrHeight;
+    					break;
+
+    				case 'top':
+    					_this.imagePosition['y'] = 0;
+    					_this.imagePosition['height'] = imgOriginalWidthOrHeight;
+    					break;
+
+    				case 'bottom':
+    					_this.imagePosition['y'] = canvasWidthOrHeight - imgOriginalWidthOrHeight;
+    					_this.imagePosition['height'] = imgOriginalWidthOrHeight;
+    					break;
+
+    				case 'right':
+    					_this.imagePosition['x'] = canvasWidthOrHeight - imgOriginalWidthOrHeight;
+    					_this.imagePosition['width'] = imgOriginalWidthOrHeight;
+    					break;
+
+    				case 'left':
+    					_this.imagePosition['x'] = 0;
+    					_this.imagePosition['width'] = imgOriginalWidthOrHeight;
+    					break;
+    			}
+
+    			if (_this.image.stretchMode) {
+    				imageAlignIndex = axis === 'x' ? _this.image.stretchMode[0] : _this.image.stretchMode[1];
+    				switch(imageAlignIndex) {
+    					case 'none':
+    						break;
+    					case 'stretch':
+    						_this.imagePosition[axis] = 0;
+    						_this.imagePosition[axis === 'x' ? 'width' : 'height'] = canvasWidthOrHeight;
+    						break;
+
+    					case 'stretch-if-bigger':
+    						if (imgOriginalWidthOrHeight < canvasWidthOrHeight) break;
+    						_this.imagePosition[axis] = 0;
+    						_this.imagePosition[axis === 'x' ? 'width' : 'height'] = canvasWidthOrHeight;
+    						break;
+
+    					case 'stretch-if-smaller':
+    						if (imgOriginalWidthOrHeight > canvasWidthOrHeight) break;
+    						_this.imagePosition[axis] = 0;
+    						_this.imagePosition[axis === 'x' ? 'width' : 'height'] = canvasWidthOrHeight;
+    						break;
+    				}
+    			}
+    		}
+    	}
+    };
+
+    var refreshColorsAndPos = function(progressPercent) {
+    	var _this = this, activeChannel, activeChannelPos, i, j;
+
+    	// Loop through each colors of the active gradient
+    	for (i = 0; i < this.activeColors.length; i++) {
+
+    		// Generate RGBA colors
+    		for (j = 0; j < 4; j++) {
+    			// If color value [0-255] round to the integer,
+    			// Else if opacity [0-1] round to 2 decimals
+    			activeChannel = _this.activeColors[i][j] +
+    				(j !== 3
+    					? Math.ceil(_this.activeColorsDiff[i][j] / 100 * progressPercent)
+    					: Math.round((_this.activeColorsDiff[i][j] / 100 * progressPercent) * 100) / 100
+    				);
+
+    			// Prevent colors values from going < 0 & > 255
+    			if (activeChannel <= 255 && activeChannel >= 0) {
+    				_this.currentColors[i][j] = activeChannel;
+    			}
+    		}
+
+    		// Generate gradient color position
+    		activeChannelPos = parseFloat((_this.activeColorsPos[i] +
+    			(_this.activeColorsPosDiff[i] / 100 * progressPercent)
+    		).toFixed(4));
+
+    		if (activeChannelPos <= 1 && activeChannelPos >= 0) {
+    			_this.currentColorsPos[i] = activeChannelPos;
+    		}
+    	}
+
+    	this.makeGradient();
+    };
+
+    var setColors = function() {
+    	var _this = this, colorDiff, colorPosDiff, nextColors, nextColorsPos;
+
+    	if (!this.channels[this.activeState]) this.channels[this.activeState] = [];
+
+    	// If the actual channel exist, reassign properties and exit
+    	// (each channel is saved to prevent recomputing it each time)
+    	if (this.channels[this.activeState][this.channelsIndex] !== undefined) {
+    		this.activeColors = this.channels[this.activeState][this.channelsIndex].colors;
+    		this.activeColorsDiff = this.channels[this.activeState][this.channelsIndex].colorsDiff;
+    		this.activeColorsPos = this.channels[this.activeState][this.channelsIndex].colorsPos;
+    		this.activeColorsPosDiff = this.channels[this.activeState][this.channelsIndex].colorsPosDiff;
+    		return;
+    	}
+
+    	// Set blank properties
+    	this.channels[this.activeState].push([{}]);
+    	this.channels[this.activeState][this.channelsIndex].colors = [];
+    	this.channels[this.activeState][this.channelsIndex].colorsDiff = [];
+    	this.channels[this.activeState][this.channelsIndex].colorsPos = [];
+    	this.channels[this.activeState][this.channelsIndex].colorsPosDiff = [];
+    	this.activeColors = [];
+    	this.activeColorsDiff = [];
+    	this.activeColorsPos = [];
+    	this.activeColorsPosDiff = [];
+
+    	// Go on each gradient of the current state
+    	this.states[this.activeState].gradients[this.channelsIndex].forEach(function(color, i) {
+    		// Push the hex color converted to rgba on the channel and the active color properties
+    		var colorPos = _this.getColorPos(color, i);
+    		var color = _this.getColor(color);
+    		var rgbaColor = _this.convertColorToRgba(color);
+    		var activeChannel = _this.channels[_this.activeState];
+
+    		activeChannel[_this.channelsIndex].colors.push(rgbaColor);
+    		_this.activeColors.push(rgbaColor);
+    		activeChannel[_this.channelsIndex].colorsPos.push(colorPos);
+    		_this.activeColorsPos.push(colorPos);
+
+    		// If it's the first channel to be set, set the currentColors
+    		if (!_this.isCurrentColorsSet) {
+    			_this.currentColors.push(_this.convertColorToRgba(color));
+    			_this.currentColorsPos.push(colorPos);
+    		}
+
+    		// If it's the last gradient, compute the color diff between the last gradient and the first one,
+    		// else between the penultimate one and the last one
+    		if (_this.channelsIndex === _this.states[_this.activeState].gradients.length - 1) {
+    			colorDiff = _this.getColorDiff(
+    				activeChannel[_this.channelsIndex].colors[i],
+    				activeChannel[0].colors[i]
+    			);
+    			colorPosDiff = _this.getColorPosDiff(
+    				activeChannel[_this.channelsIndex].colorsPos[i],
+    				activeChannel[0].colorsPos[i]
+    			);
+
+    		} else {
+    			nextColors = _this.convertColorToRgba(_this.getColor(_this.states[_this.activeState].gradients[_this.channelsIndex + 1][i]));
+    			nextColorsPos = _this.getColorPos(_this.states[_this.activeState].gradients[_this.channelsIndex + 1][i], i);
+    			colorDiff = _this.getColorDiff(activeChannel[_this.channelsIndex].colors[i], nextColors);
+    			colorPosDiff = _this.getColorPosDiff(activeChannel[_this.channelsIndex].colorsPos[i], nextColorsPos);
+    		}
+
+    		activeChannel[_this.channelsIndex].colorsDiff.push(colorDiff);
+    		_this.activeColorsDiff.push(colorDiff);
+    		activeChannel[_this.channelsIndex].colorsPosDiff.push(colorPosDiff);
+    		_this.activeColorsPosDiff.push(colorPosDiff);
+    	});
+
+    	this.activetransitionSpeed = this.states[this.activeState].transitionSpeed || 5000;
+    	this.isCurrentColorsSet = true;
+    };
+
+    var setDirection = function() {
+    	var ctx = this.context;
+
+    	switch(this.direction) {
+    		case 'diagonal':
+    			return ctx.createLinearGradient(0, 0, this.x1, this.y1);
+
+    		case 'left-right':
+    			return ctx.createLinearGradient(0, 0, this.x1, 0);
+
+    		case 'top-bottom':
+    			return ctx.createLinearGradient(this.x1 / 2, 0, this.x1 / 2, this.y1);
+
+    		case 'radial':
+    			return ctx.createRadialGradient(this.x1 / 2, this.y1 / 2, this.x1 / 2, this.x1 / 2, this.y1 / 2, 0);
+
+    		case 'custom':
+    			return ctx.createLinearGradient(
+    				getCustomCoordinateInPixels(this.customDirection.x0, this.x1),
+    				getCustomCoordinateInPixels(this.customDirection.y0, this.y1),
+    				getCustomCoordinateInPixels(this.customDirection.x1, this.x1),
+    				getCustomCoordinateInPixels(this.customDirection.y1, this.y1)
+    			);
+    	}
+    };
+
+    function getCustomCoordinateInPixels(coordinate, size) {
+    	return coordinate.indexOf('%') > -1
+    		? size / 100 * parseInt(coordinate.split('%')[0], 10)
+    		: parseInt(coordinate.split('px')[0], 10);
+    }
+
+    var setSizeAttributes = function() {
+    	this.getDimensions();
+    	this.canvas.setAttribute('width', this.x1);
+    	this.canvas.setAttribute('height', this.y1);
+    	if (this.image) this.prepareImage();
+    	this.refreshColorsAndPos();
+    };
+
+    var triggerError = function(element) {
+    	var siteURL = 'https://sarcadass.github.io/granim.js/api.html';
+    	throw new Error('Granim: Input error on "' + element + '" option.\nCheck the API ' + siteURL + '.');
+    };
+
+    var validateInput = function(inputType) {
+    	var xPositionValues = ['left', 'center', 'right'];
+    	var yPositionValues = ['top', 'center', 'bottom'];
+    	var stretchModeValues = ['none', 'stretch', 'stretch-if-smaller', 'stretch-if-bigger'];
+    	var blendingModeValues = ['multiply', 'screen', 'normal', 'overlay', 'darken',
+    		'lighten', 'lighter', 'color-dodge', 'color-burn', 'hard-light', 'soft-light',
+    		'difference', 'exclusion', 'hue', 'saturation', 'color', 'luminosity'];
+    	var directionValues = ['diagonal', 'left-right', 'top-bottom', 'radial', 'custom'];
+
+    	switch(inputType) {
+    		case 'image':
+    			// Validate image.position
+    			if ((!Array.isArray(this.image.position) || this.image.position.length !== 2) ||
+    				xPositionValues.indexOf(this.image.position[0]) === -1 ||
+    				yPositionValues.indexOf(this.image.position[1]) === -1
+    			) { this.triggerError('image.position'); }
+    			// Validate image.stretchMode
+    			if (this.image.stretchMode) {
+    				if ((!Array.isArray(this.image.stretchMode) || this.image.stretchMode.length !== 2) ||
+    					stretchModeValues.indexOf(this.image.stretchMode[0]) === -1 ||
+    					stretchModeValues.indexOf(this.image.stretchMode[1]) === -1
+    				) { this.triggerError('image.stretchMode'); }
+    			}
+    			break;
+
+    		case 'blendingMode':
+    			if (blendingModeValues.indexOf(this.image.blendingMode) === -1) {
+    				this.clear();
+    				this.triggerError('blendingMode');
+    			}
+    			break;
+
+    		case 'direction':
+    			if (directionValues.indexOf(this.direction) === -1) {
+    				this.triggerError('direction');
+    			} else {
+    				if (this.direction === 'custom') {
+    					if (!areDefinedInPixelsOrPercentage([
+    						this.customDirection.x0,
+    						this.customDirection.x1,
+    						this.customDirection.y0,
+    						this.customDirection.y1
+    					])) {
+    						this.triggerError('customDirection');
+    					}
+    				}
+    			}
+    			break;
+    	}
+    };
+
+    function areDefinedInPixelsOrPercentage(array) {
+    	var definedInPixelsOrPercentage = true, i = 0, value;
+    	while (definedInPixelsOrPercentage && i < array.length) {
+    		value = array[i];
+    		if (typeof value !== 'string') {
+    			definedInPixelsOrPercentage = false;
+    		} else {
+    			var splittedValue = null;
+    			var unit = null;
+    			if (value.indexOf('px') !== -1) unit = 'px';
+    			if (value.indexOf('%') !== -1) unit = '%';
+    			splittedValue = value.split(unit).filter(function(value) {
+    				return value.length > 0;
+    			});
+    			// Check if there is a unit ('px' or '%'),
+    			// a char before the unit,
+    			// no char after the unit,
+    			// the string without the unit is only composed of digits
+    			if (
+    				!unit
+    				|| splittedValue.length > 2
+    				|| !splittedValue[0]
+    				|| splittedValue[1]
+    				|| !/^-?\d+\.?\d*$/.test(splittedValue[0])
+    			) {
+    				definedInPixelsOrPercentage = false;
+    			}
+    		}
+    		i++;
+    	}
+    	return definedInPixelsOrPercentage;
+    }
+
+    function Granim(options) {
+    	this.getElement(options.element);
+    	this.x1 = 0;
+    	this.y1 = 0;
+    	this.name = options.name || false;
+    	this.elToSetClassOn = options.elToSetClassOn || 'body';
+    	this.direction = options.direction || 'diagonal';
+    	this.customDirection = options.customDirection || {};
+    	this.validateInput('direction');
+    	this.isPausedWhenNotInView = options.isPausedWhenNotInView || false;
+    	this.states = options.states;
+    	this.stateTransitionSpeed = options.stateTransitionSpeed || 1000;
+    	this.previousTimeStamp = null;
+    	this.progress = 0;
+    	this.isPaused = false;
+    	this.isCleared = false;
+    	this.isPausedBecauseNotInView = false;
+    	this.context = this.canvas.getContext('2d');
+    	this.channels = {};
+    	this.channelsIndex = 0;
+    	this.activeState = options.defaultStateName || 'default-state';
+    	this.isChangingState = false;
+    	this.currentColors = [];
+    	this.currentColorsPos = [];
+    	this.activetransitionSpeed = null;
+    	this.eventPolyfill();
+    	this.scrollDebounceThreshold = options.scrollDebounceThreshold || 300;
+    	this.scrollDebounceTimeout = null;
+    	this.isImgLoaded = false;
+    	this.isCanvasInWindowView = false;
+    	this.firstScrollInit = true;
+    	this.animating = false;
+    	this.gradientLength = this.states[this.activeState].gradients[0].length;
+    	if (options.image && options.image.source) {
+    		this.image = {
+    			source: options.image.source,
+    			position: options.image.position || ['center', 'center'],
+    			stretchMode: options.image.stretchMode || false,
+    			blendingMode: options.image.blendingMode || false
+    		};
+    	}
+    	this.events = {
+    		start: new CustomEvent('granim:start'),
+    		end: new CustomEvent('granim:end'),
+    		gradientChange: function(details) {
+    			return new CustomEvent('granim:gradientChange', {
+    				detail: {
+    					isLooping: details.isLooping,
+    					colorsFrom: details.colorsFrom,
+    					colorsTo: details.colorsTo,
+    					activeState: details.activeState
+    				},
+    				bubbles: false,
+    				cancelable: false
+    			});
+    		}
+    	};
+    	this.callbacks = {
+    		onStart: typeof options.onStart === 'function' ? options.onStart : false,
+    		onGradientChange: typeof options.onGradientChange === 'function' ?
+    			options.onGradientChange :
+    			false,
+    		onEnd: typeof options.onEnd === 'function' ? options.onEnd : false
+    	};
+    	this.getDimensions();
+    	this.canvas.setAttribute('width', this.x1);
+    	this.canvas.setAttribute('height', this.y1);
+    	this.setColors();
+
+    	if (this.image) {
+    		this.validateInput('image');
+    		this.prepareImage();
+    	}
+
+    	this.pauseWhenNotInViewNameSpace = this.pauseWhenNotInView.bind(this);
+    	this.setSizeAttributesNameSpace = this.setSizeAttributes.bind(this);
+    	this.onResize();
+
+    	if (this.isPausedWhenNotInView) {
+    		this.onScroll();
+    		
+    	} else {
+    		if (!this.image) {
+    			this.refreshColorsAndPos();
+    			this.animation = requestAnimationFrame(this.animateColors.bind(this));
+    			this.animating = true;
+    		}
+    	}
+
+    	// Callback and Event
+    	if (this.callbacks.onStart) this.callbacks.onStart();
+    	this.canvas.dispatchEvent(this.events.start);
+    }
+
+    Granim.prototype.animateColors = animateColors;
+    Granim.prototype.changeBlendingMode = changeBlendingMode;
+    Granim.prototype.changeDirection = changeDirection;
+    Granim.prototype.changeState = changeState;
+    Granim.prototype.clear = clear;
+    Granim.prototype.convertColorToRgba = convertColorToRgba;
+    Granim.prototype.destroy = destroy;
+    Granim.prototype.eventPolyfill = eventPolyfill;
+    Granim.prototype.getColor = getColor;
+    Granim.prototype.getColorDiff = getColorDiff;
+    Granim.prototype.getColorPos = getColorPos;
+    Granim.prototype.getColorPosDiff = getColorPosDiff;
+    Granim.prototype.getCurrentColors = getCurrentColors;
+    Granim.prototype.getCurrentColorsPos = getCurrentColorsPos;
+    Granim.prototype.getDimensions = getDimensions;
+    Granim.prototype.getElement = getElement;
+    Granim.prototype.getLightness = getLightness;
+    Granim.prototype.makeGradient = makeGradient;
+    Granim.prototype.onResize = onResize;
+    Granim.prototype.onScroll = onScroll;
+    Granim.prototype.pause = pause;
+    Granim.prototype.pauseWhenNotInView = pauseWhenNotInView;
+    Granim.prototype.play = play;
+    Granim.prototype.prepareImage = prepareImage;
+    Granim.prototype.refreshColorsAndPos = refreshColorsAndPos;
+    Granim.prototype.setColors = setColors;
+    Granim.prototype.setDirection = setDirection;
+    Granim.prototype.setSizeAttributes = setSizeAttributes;
+    Granim.prototype.triggerError = triggerError;
+    Granim.prototype.validateInput = validateInput;
+
+    var Granim_1 = Granim;
+
+    var granim = Granim_1;
+
+    function commonjsRequire (target) {
+    	throw new Error('Could not dynamically require "' + target + '". Please configure the dynamicRequireTargets option of @rollup/plugin-commonjs appropriately for this require call to behave properly.');
+    }
+
+    /*! Granim v2.0.0 - https://sarcadass.github.io/granim.js */
+
+    !function t(e,i,s){function o(r,a){if(!i[r]){if(!e[r]){var h="function"==typeof commonjsRequire&&commonjsRequire;if(!a&&h)return h(r,!0);if(n)return n(r,!0);var c=new Error("Cannot find module '"+r+"'");throw c.code="MODULE_NOT_FOUND",c}var l=i[r]={exports:{}};e[r][0].call(l.exports,function(t){var i=e[r][1][t];return o(i?i:t)},l,l.exports,t,e,i,s);}return i[r].exports}for(var n="function"==typeof commonjsRequire&&commonjsRequire,r=0;r<s.length;r++)o(s[r]);return o}({1:[function(t,e,i){function s(t){this.getElement(t.element),this.x1=0,this.y1=0,this.name=t.name||!1,this.elToSetClassOn=t.elToSetClassOn||"body",this.direction=t.direction||"diagonal",this.customDirection=t.customDirection||{},this.validateInput("direction"),this.isPausedWhenNotInView=t.isPausedWhenNotInView||!1,this.states=t.states,this.stateTransitionSpeed=t.stateTransitionSpeed||1e3,this.previousTimeStamp=null,this.progress=0,this.isPaused=!1,this.isCleared=!1,this.isPausedBecauseNotInView=!1,this.context=this.canvas.getContext("2d"),this.channels={},this.channelsIndex=0,this.activeState=t.defaultStateName||"default-state",this.isChangingState=!1,this.currentColors=[],this.currentColorsPos=[],this.activetransitionSpeed=null,this.eventPolyfill(),this.scrollDebounceThreshold=t.scrollDebounceThreshold||300,this.scrollDebounceTimeout=null,this.isImgLoaded=!1,this.isCanvasInWindowView=!1,this.firstScrollInit=!0,this.animating=!1,this.gradientLength=this.states[this.activeState].gradients[0].length,t.image&&t.image.source&&(this.image={source:t.image.source,position:t.image.position||["center","center"],stretchMode:t.image.stretchMode||!1,blendingMode:t.image.blendingMode||!1}),this.events={start:new CustomEvent("granim:start"),end:new CustomEvent("granim:end"),gradientChange:function(t){return new CustomEvent("granim:gradientChange",{detail:{isLooping:t.isLooping,colorsFrom:t.colorsFrom,colorsTo:t.colorsTo,activeState:t.activeState},bubbles:!1,cancelable:!1})}},this.callbacks={onStart:"function"==typeof t.onStart&&t.onStart,onGradientChange:"function"==typeof t.onGradientChange&&t.onGradientChange,onEnd:"function"==typeof t.onEnd&&t.onEnd},this.getDimensions(),this.canvas.setAttribute("width",this.x1),this.canvas.setAttribute("height",this.y1),this.setColors(),this.image&&(this.validateInput("image"),this.prepareImage()),this.pauseWhenNotInViewNameSpace=this.pauseWhenNotInView.bind(this),this.setSizeAttributesNameSpace=this.setSizeAttributes.bind(this),this.onResize(),this.isPausedWhenNotInView?this.onScroll():this.image||(this.refreshColorsAndPos(),this.animation=requestAnimationFrame(this.animateColors.bind(this)),this.animating=!0),this.callbacks.onStart&&this.callbacks.onStart(),this.canvas.dispatchEvent(this.events.start);}s.prototype.animateColors=t("./animateColors.js"),s.prototype.changeBlendingMode=t("./changeBlendingMode.js"),s.prototype.changeDirection=t("./changeDirection.js"),s.prototype.changeState=t("./changeState.js"),s.prototype.clear=t("./clear.js"),s.prototype.convertColorToRgba=t("./convertColorToRgba.js"),s.prototype.destroy=t("./destroy.js"),s.prototype.eventPolyfill=t("./eventPolyfill.js"),s.prototype.getColor=t("./getColor.js"),s.prototype.getColorDiff=t("./getColorDiff.js"),s.prototype.getColorPos=t("./getColorPos.js"),s.prototype.getColorPosDiff=t("./getColorPosDiff.js"),s.prototype.getCurrentColors=t("./getCurrentColors.js"),s.prototype.getCurrentColorsPos=t("./getCurrentColorsPos.js"),s.prototype.getDimensions=t("./getDimensions.js"),s.prototype.getElement=t("./getElement.js"),s.prototype.getLightness=t("./getLightness.js"),s.prototype.makeGradient=t("./makeGradient.js"),s.prototype.onResize=t("./onResize.js"),s.prototype.onScroll=t("./onScroll.js"),s.prototype.pause=t("./pause.js"),s.prototype.pauseWhenNotInView=t("./pauseWhenNotInView.js"),s.prototype.play=t("./play.js"),s.prototype.prepareImage=t("./prepareImage.js"),s.prototype.refreshColorsAndPos=t("./refreshColorsAndPos.js"),s.prototype.setColors=t("./setColors.js"),s.prototype.setDirection=t("./setDirection.js"),s.prototype.setSizeAttributes=t("./setSizeAttributes.js"),s.prototype.triggerError=t("./triggerError.js"),s.prototype.validateInput=t("./validateInput.js"),e.exports=s;},{"./animateColors.js":2,"./changeBlendingMode.js":3,"./changeDirection.js":4,"./changeState.js":5,"./clear.js":6,"./convertColorToRgba.js":7,"./destroy.js":8,"./eventPolyfill.js":9,"./getColor.js":10,"./getColorDiff.js":11,"./getColorPos.js":12,"./getColorPosDiff.js":13,"./getCurrentColors.js":14,"./getCurrentColorsPos.js":15,"./getDimensions.js":16,"./getElement.js":17,"./getLightness.js":18,"./makeGradient.js":19,"./onResize.js":20,"./onScroll.js":21,"./pause.js":22,"./pauseWhenNotInView.js":23,"./play.js":24,"./prepareImage.js":25,"./refreshColorsAndPos.js":26,"./setColors.js":27,"./setDirection.js":28,"./setSizeAttributes.js":29,"./triggerError.js":30,"./validateInput.js":31}],2:[function(t,e,i){e.exports=function(t){var e,i,s,o=t-this.previousTimeStamp>100,n=void 0===this.states[this.activeState].loop||this.states[this.activeState].loop;(null===this.previousTimeStamp||o)&&(this.previousTimeStamp=t),this.progress=this.progress+(t-this.previousTimeStamp),e=(this.progress/this.activetransitionSpeed*100).toFixed(2),this.previousTimeStamp=t,this.refreshColorsAndPos(e),e<100?this.animation=requestAnimationFrame(this.animateColors.bind(this)):this.channelsIndex<this.states[this.activeState].gradients.length-2||n?(this.isChangingState&&(this.activetransitionSpeed=this.states[this.activeState].transitionSpeed||5e3,this.isChangingState=!1),this.previousTimeStamp=null,this.progress=0,this.channelsIndex++,i=!1,this.channelsIndex===this.states[this.activeState].gradients.length-1?i=!0:this.channelsIndex===this.states[this.activeState].gradients.length&&(this.channelsIndex=0),s=void 0===this.states[this.activeState].gradients[this.channelsIndex+1]?this.states[this.activeState].gradients[0]:this.states[this.activeState].gradients[this.channelsIndex+1],this.setColors(),this.animation=requestAnimationFrame(this.animateColors.bind(this)),this.callbacks.onGradientChange&&this.callbacks.onGradientChange({isLooping:i,colorsFrom:this.states[this.activeState].gradients[this.channelsIndex],colorsTo:s,activeState:this.activeState}),this.canvas.dispatchEvent(this.events.gradientChange({isLooping:i,colorsFrom:this.states[this.activeState].gradients[this.channelsIndex],colorsTo:s,activeState:this.activeState}))):(cancelAnimationFrame(this.animation),this.callbacks.onEnd&&this.callbacks.onEnd(),this.canvas.dispatchEvent(new CustomEvent("granim:end")));};},{}],3:[function(t,e,i){e.exports=function(t){this.context.clearRect(0,0,this.x1,this.y1),this.context.globalCompositeOperation=this.image.blendingMode=t,this.validateInput("blendingMode"),this.isPaused&&this.refreshColorsAndPos();};},{}],4:[function(t,e,i){e.exports=function(t){this.context.clearRect(0,0,this.x1,this.y1),this.direction=t,this.validateInput("direction"),this.isPaused&&this.refreshColorsAndPos();};},{}],5:[function(t,e,i){e.exports=function(t){var e=this;this.activeState!==t&&(this.isPaused||(this.isPaused=!0,this.pause()),this.channelsIndex=-1,this.activetransitionSpeed=this.stateTransitionSpeed,this.activeColorsDiff=[],this.activeColorsPosDiff=[],this.activeColors=this.getCurrentColors(),this.activeColorsPos=this.getCurrentColorsPos(),this.progress=0,this.previousTimeStamp=null,this.isChangingState=!0,this.states[t].gradients[0].forEach(function(t,i,s){var o=e.convertColorToRgba(e.getColor(t)),n=e.getColorPos(t,i),r=e.getColorDiff(e.activeColors[i],o),a=e.getColorPosDiff(e.activeColorsPos[i],n);e.activeColorsDiff.push(r),e.activeColorsPosDiff.push(a);}),this.activeState=t,this.play());};},{}],6:[function(t,e,i){e.exports=function(){this.isPaused?this.isPaused=!1:cancelAnimationFrame(this.animation),this.isCleared=!0,this.context.clearRect(0,0,this.x1,this.y1);};},{}],7:[function(t,e,i){function s(t){var e=Object.keys(h),i=0;for(i;i<e.length;i++)if(a=h[e[i]].exec(t))return e[i];return !1}function o(t){var e=/^#?([a-f\d])([a-f\d])([a-f\d])$/i;t=t.replace(e,function(t,e,i,s){return e+e+i+i+s+s});var i=/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(t);return i?[parseInt(i[1],16),parseInt(i[2],16),parseInt(i[3],16),1]:null}function n(t,e,i){return i<0&&(i+=1),i>1&&(i-=1),i<1/6?t+6*(e-t)*i:i<.5?e:i<2/3?t+(e-t)*(2/3-i)*6:t}function r(t,e,i,s){var o,r,a,h,c;return 0===e?o=r=a=i:(h=i<.5?i*(1+e):i+e-i*e,c=2*i-h,o=n(c,h,t+1/3),r=n(c,h,t),a=n(c,h,t-1/3)),[Math.round(255*o),Math.round(255*r),Math.round(255*a),s]}var a,h={hexa:/^#(?:[0-9a-fA-F]{3}){1,2}$/,rgba:/^rgba\((\d{1,3}), ?(\d{1,3}), ?(\d{1,3}), ?(.?\d{1,3})\)$/,rgb:/^rgb\((\d{1,3}), ?(\d{1,3}), ?(\d{1,3})\)$/,hsla:/^hsla\((\d{1,3}), ?(\d{1,3})%, ?(\d{1,3})%, ?(.?\d{1,3})\)$/,hsl:/^hsl\((\d{1,3}), ?(\d{1,3})%, ?(\d{1,3})%\)$/};e.exports=function(t){switch(s(t)){default:this.triggerError("colorType");case"hexa":return o(t);case"rgba":return [parseInt(a[1],10),parseInt(a[2],10),parseInt(a[3],10),parseFloat(a[4])];case"rgb":return [parseInt(a[1],10),parseInt(a[2],10),parseInt(a[3],10),1];case"hsla":return r(parseInt(a[1],10)/360,parseInt(a[2],10)/100,parseInt(a[3],10)/100,parseFloat(a[4]));case"hsl":return r(parseInt(a[1],10)/360,parseInt(a[2],10)/100,parseInt(a[3],10)/100,1)}};},{}],8:[function(t,e,i){e.exports=function(){this.onResize("removeListeners"),this.onScroll("removeListeners"),this.clear();};},{}],9:[function(t,e,i){e.exports=function(){function t(t,e){e=e||{bubbles:!1,cancelable:!1,detail:void 0};var i=document.createEvent("CustomEvent");return i.initCustomEvent(t,e.bubbles,e.cancelable,e.detail),i}"function"!=typeof window.CustomEvent&&(t.prototype=window.Event.prototype,window.CustomEvent=t);};},{}],10:[function(t,e,i){e.exports=function(t){return "string"==typeof t?t:"object"==typeof t&&t.color?t.color:void this.triggerError("gradient.color")};},{}],11:[function(t,e,i){e.exports=function(t,e){var i=0,s=[];for(i;i<4;i++)s.push(e[i]-t[i]);return s};},{}],12:[function(t,e,i){e.exports=function(t,e){return "object"==typeof t&&t.pos?t.pos:parseFloat(e?(1/(this.gradientLength-1)*e).toFixed(2):0)};},{}],13:[function(t,e,i){e.exports=function(t,e){return e-t};},{}],14:[function(t,e,i){e.exports=function(){var t,e,i=[];for(t=0;t<this.currentColors.length;t++)for(i.push([]),e=0;e<4;e++)i[t].push(this.currentColors[t][e]);return i};},{}],15:[function(t,e,i){e.exports=function(){var t,e=[];for(t=0;t<this.currentColorsPos.length;t++)e.push(this.currentColorsPos[t]);return e};},{}],16:[function(t,e,i){e.exports=function(){this.x1=this.canvas.offsetWidth,this.y1=this.canvas.offsetHeight;};},{}],17:[function(t,e,i){e.exports=function(t){if(t instanceof HTMLCanvasElement)this.canvas=t;else {if("string"!=typeof t)throw new Error("The element you used is neither a String, nor a HTMLCanvasElement");this.canvas=document.querySelector(t);}if(!this.canvas)throw new Error("`"+t+"` could not be found in the DOM")};},{}],18:[function(t,e,i){e.exports=function(){var t,e,i=this.getCurrentColors(),s=null,o=i.map(function(t){return Math.max(t[0],t[1],t[2])});for(e=0;e<o.length;e++)s=null===s?o[e]:s+o[e],e===o.length-1&&(t=Math.round(s/(e+1)));return t>=128?"light":"dark"};},{}],19:[function(t,e,i){e.exports=function(){var t=this.setDirection(),e=document.querySelector(this.elToSetClassOn).classList,i=0;for(this.context.clearRect(0,0,this.x1,this.y1),this.image&&this.context.drawImage(this.imageNode,this.imagePosition.x,this.imagePosition.y,this.imagePosition.width,this.imagePosition.height),i;i<this.currentColors.length;i++)t.addColorStop(this.currentColorsPos[i],"rgba("+this.currentColors[i][0]+", "+this.currentColors[i][1]+", "+this.currentColors[i][2]+", "+this.currentColors[i][3]+")");this.name&&("light"===this.getLightness()?(e.remove(this.name+"-dark"),e.add(this.name+"-light")):(e.remove(this.name+"-light"),e.add(this.name+"-dark"))),this.context.fillStyle=t,this.context.fillRect(0,0,this.x1,this.y1);};},{}],20:[function(t,e,i){e.exports=function(t){return "removeListeners"===t?void window.removeEventListener("resize",this.setSizeAttributesNameSpace):void window.addEventListener("resize",this.setSizeAttributesNameSpace)};},{}],21:[function(t,e,i){e.exports=function(t){return "removeListeners"===t?void window.removeEventListener("scroll",this.pauseWhenNotInViewNameSpace):(window.addEventListener("scroll",this.pauseWhenNotInViewNameSpace),void this.pauseWhenNotInViewNameSpace())};},{}],22:[function(t,e,i){e.exports=function(t){var e="isPausedBecauseNotInView"===t;this.isCleared||(e||(this.isPaused=!0),cancelAnimationFrame(this.animation),this.animating=!1);};},{}],23:[function(t,e,i){e.exports=function(){var t=this;this.scrollDebounceTimeout&&clearTimeout(this.scrollDebounceTimeout),this.scrollDebounceTimeout=setTimeout(function(){var e=t.canvas.getBoundingClientRect();if(t.isCanvasInWindowView=!(e.bottom<0||e.right<0||e.left>window.innerWidth||e.top>window.innerHeight),t.isCanvasInWindowView){if(!t.isPaused||t.firstScrollInit){if(t.image&&!t.isImgLoaded)return;t.isPausedBecauseNotInView=!1,t.play("isPlayedBecauseInView"),t.firstScrollInit=!1;}}else !t.image&&t.firstScrollInit&&(t.refreshColorsAndPos(),t.firstScrollInit=!1),t.isPaused||t.isPausedBecauseNotInView||(t.isPausedBecauseNotInView=!0,t.pause("isPausedBecauseNotInView"));},this.scrollDebounceThreshold);};},{}],24:[function(t,e,i){e.exports=function(t){var e="isPlayedBecauseInView"===t;e||(this.isPaused=!1),this.isCleared=!1,this.animating||(this.animation=requestAnimationFrame(this.animateColors.bind(this)),this.animating=!0);};},{}],25:[function(t,e,i){e.exports=function(){function t(){function t(t){var i,s=e[t+"1"],o=e["x"===t?"imgOriginalWidth":"imgOriginalHeight"],n="x"===t?e.image.position[0]:e.image.position[1];switch(n){case"center":i=o>s?-(o-s)/2:(s-o)/2,e.imagePosition[t]=i,e.imagePosition["x"===t?"width":"height"]=o;break;case"top":e.imagePosition.y=0,e.imagePosition.height=o;break;case"bottom":e.imagePosition.y=s-o,e.imagePosition.height=o;break;case"right":e.imagePosition.x=s-o,e.imagePosition.width=o;break;case"left":e.imagePosition.x=0,e.imagePosition.width=o;}if(e.image.stretchMode)switch(n="x"===t?e.image.stretchMode[0]:e.image.stretchMode[1]){case"none":break;case"stretch":e.imagePosition[t]=0,e.imagePosition["x"===t?"width":"height"]=s;break;case"stretch-if-bigger":if(o<s)break;e.imagePosition[t]=0,e.imagePosition["x"===t?"width":"height"]=s;break;case"stretch-if-smaller":if(o>s)break;e.imagePosition[t]=0,e.imagePosition["x"===t?"width":"height"]=s;}}var i,s;for(i=0;i<2;i++)s=i?"y":"x",t(s);}var e=this;return this.imagePosition||(this.imagePosition={x:0,y:0,width:0,height:0}),this.image.blendingMode&&(this.context.globalCompositeOperation=this.image.blendingMode),this.imageNode?void t():(this.imageNode=new Image,this.imageNode.onerror=function(){throw new Error("Granim: The image source is invalid.")},this.imageNode.onload=function(){e.imgOriginalWidth=e.imageNode.width,e.imgOriginalHeight=e.imageNode.height,t(),e.refreshColorsAndPos(),e.isPausedWhenNotInView&&!e.isCanvasInWindowView||(e.animation=requestAnimationFrame(e.animateColors.bind(e))),e.isImgLoaded=!0;},void(this.imageNode.src=this.image.source))};},{}],26:[function(t,e,i){e.exports=function(t){var e,i,s,o,n=this;for(s=0;s<this.activeColors.length;s++){for(o=0;o<4;o++)e=n.activeColors[s][o]+(3!==o?Math.ceil(n.activeColorsDiff[s][o]/100*t):Math.round(n.activeColorsDiff[s][o]/100*t*100)/100),e<=255&&e>=0&&(n.currentColors[s][o]=e);i=parseFloat((n.activeColorsPos[s]+n.activeColorsPosDiff[s]/100*t).toFixed(4)),i<=1&&i>=0&&(n.currentColorsPos[s]=i);}this.makeGradient();};},{}],27:[function(t,e,i){e.exports=function(){var t,e,i,s,o=this;return this.channels[this.activeState]||(this.channels[this.activeState]=[]),void 0!==this.channels[this.activeState][this.channelsIndex]?(this.activeColors=this.channels[this.activeState][this.channelsIndex].colors,this.activeColorsDiff=this.channels[this.activeState][this.channelsIndex].colorsDiff,this.activeColorsPos=this.channels[this.activeState][this.channelsIndex].colorsPos,void(this.activeColorsPosDiff=this.channels[this.activeState][this.channelsIndex].colorsPosDiff)):(this.channels[this.activeState].push([{}]),this.channels[this.activeState][this.channelsIndex].colors=[],this.channels[this.activeState][this.channelsIndex].colorsDiff=[],this.channels[this.activeState][this.channelsIndex].colorsPos=[],this.channels[this.activeState][this.channelsIndex].colorsPosDiff=[],this.activeColors=[],this.activeColorsDiff=[],this.activeColorsPos=[],this.activeColorsPosDiff=[],this.states[this.activeState].gradients[this.channelsIndex].forEach(function(n,r){var a=o.getColorPos(n,r),n=o.getColor(n),h=o.convertColorToRgba(n),c=o.channels[o.activeState];c[o.channelsIndex].colors.push(h),o.activeColors.push(h),c[o.channelsIndex].colorsPos.push(a),o.activeColorsPos.push(a),o.isCurrentColorsSet||(o.currentColors.push(o.convertColorToRgba(n)),o.currentColorsPos.push(a)),o.channelsIndex===o.states[o.activeState].gradients.length-1?(t=o.getColorDiff(c[o.channelsIndex].colors[r],c[0].colors[r]),e=o.getColorPosDiff(c[o.channelsIndex].colorsPos[r],c[0].colorsPos[r])):(i=o.convertColorToRgba(o.getColor(o.states[o.activeState].gradients[o.channelsIndex+1][r])),s=o.getColorPos(o.states[o.activeState].gradients[o.channelsIndex+1][r],r),t=o.getColorDiff(c[o.channelsIndex].colors[r],i),e=o.getColorPosDiff(c[o.channelsIndex].colorsPos[r],s)),c[o.channelsIndex].colorsDiff.push(t),o.activeColorsDiff.push(t),c[o.channelsIndex].colorsPosDiff.push(e),o.activeColorsPosDiff.push(e);}),this.activetransitionSpeed=this.states[this.activeState].transitionSpeed||5e3,void(this.isCurrentColorsSet=!0))};},{}],28:[function(t,e,i){function s(t,e){return t.indexOf("%")>-1?e/100*parseInt(t.split("%")[0],10):parseInt(t.split("px")[0],10)}e.exports=function(){var t=this.context;switch(this.direction){case"diagonal":return t.createLinearGradient(0,0,this.x1,this.y1);case"left-right":return t.createLinearGradient(0,0,this.x1,0);case"top-bottom":return t.createLinearGradient(this.x1/2,0,this.x1/2,this.y1);case"radial":return t.createRadialGradient(this.x1/2,this.y1/2,this.x1/2,this.x1/2,this.y1/2,0);case"custom":return t.createLinearGradient(s(this.customDirection.x0,this.x1),s(this.customDirection.y0,this.y1),s(this.customDirection.x1,this.x1),s(this.customDirection.y1,this.y1))}};},{}],29:[function(t,e,i){e.exports=function(){this.getDimensions(),this.canvas.setAttribute("width",this.x1),this.canvas.setAttribute("height",this.y1),this.image&&this.prepareImage(),this.refreshColorsAndPos();};},{}],30:[function(t,e,i){e.exports=function(t){var e="https://sarcadass.github.io/granim.js/api.html";throw new Error('Granim: Input error on "'+t+'" option.\nCheck the API '+e+".")};},{}],31:[function(t,e,i){function s(t){for(var e,i=!0,s=0;i&&s<t.length;){if(e=t[s],"string"!=typeof e)i=!1;else {var o=null,n=null;e.indexOf("px")!==-1&&(n="px"),e.indexOf("%")!==-1&&(n="%"),o=e.split(n).filter(function(t){return t.length>0}),(!n||o.length>2||!o[0]||o[1]||!/^-?\d+\.?\d*$/.test(o[0]))&&(i=!1);}s++;}return i}e.exports=function(t){var e=["left","center","right"],i=["top","center","bottom"],o=["none","stretch","stretch-if-smaller","stretch-if-bigger"],n=["multiply","screen","normal","overlay","darken","lighten","lighter","color-dodge","color-burn","hard-light","soft-light","difference","exclusion","hue","saturation","color","luminosity"],r=["diagonal","left-right","top-bottom","radial","custom"];switch(t){case"image":Array.isArray(this.image.position)&&2===this.image.position.length&&e.indexOf(this.image.position[0])!==-1&&i.indexOf(this.image.position[1])!==-1||this.triggerError("image.position"),this.image.stretchMode&&(Array.isArray(this.image.stretchMode)&&2===this.image.stretchMode.length&&o.indexOf(this.image.stretchMode[0])!==-1&&o.indexOf(this.image.stretchMode[1])!==-1||this.triggerError("image.stretchMode"));break;case"blendingMode":n.indexOf(this.image.blendingMode)===-1&&(this.clear(),this.triggerError("blendingMode"));break;case"direction":r.indexOf(this.direction)===-1?this.triggerError("direction"):"custom"===this.direction&&(s([this.customDirection.x0,this.customDirection.x1,this.customDirection.y0,this.customDirection.y1])||this.triggerError("customDirection"));}};},{}],32:[function(t,e,i){window.Granim=t("./lib/Granim.js");},{"./lib/Granim.js":1}]},{},[32]);
+
     /* src\App.svelte generated by Svelte v3.44.1 */
     const file = "src\\App.svelte";
 
-    // (49:4) <FullpageSection center >
+    // (82:3) <FullpageSection center >
     function create_default_slot_2(ctx) {
     	let hero;
     	let current;
@@ -3508,14 +4473,14 @@ var app = (function () {
     		block,
     		id: create_default_slot_2.name,
     		type: "slot",
-    		source: "(49:4) <FullpageSection center >",
+    		source: "(82:3) <FullpageSection center >",
     		ctx
     	});
 
     	return block;
     }
 
-    // (52:2) <FullpageSection center>
+    // (85:3) <FullpageSection center>
     function create_default_slot_1(ctx) {
     	let skills;
     	let current;
@@ -3547,14 +4512,14 @@ var app = (function () {
     		block,
     		id: create_default_slot_1.name,
     		type: "slot",
-    		source: "(52:2) <FullpageSection center>",
+    		source: "(85:3) <FullpageSection center>",
     		ctx
     	});
 
     	return block;
     }
 
-    // (48:1) <Fullpage {sections} arrows>
+    // (81:2) <Fullpage {sections} arrows>
     function create_default_slot(ctx) {
     	let fullpagesection0;
     	let t;
@@ -3629,7 +4594,7 @@ var app = (function () {
     		block,
     		id: create_default_slot.name,
     		type: "slot",
-    		source: "(48:1) <Fullpage {sections} arrows>",
+    		source: "(81:2) <Fullpage {sections} arrows>",
     		ctx
     	});
 
@@ -3637,8 +4602,8 @@ var app = (function () {
     }
 
     function create_fragment(ctx) {
-    	let main1;
-    	let main0;
+    	let canvas;
+    	let main;
     	let fullpage;
     	let current;
 
@@ -3654,22 +4619,23 @@ var app = (function () {
 
     	const block = {
     		c: function create() {
-    			main1 = element("main");
-    			main0 = element("main");
+    			canvas = element("canvas");
+    			main = element("main");
     			create_component(fullpage.$$.fragment);
-    			attr_dev(main0, "class", "bg-dotted-grid svelte-nvinl6");
-    			add_location(main0, file, 46, 1, 1031);
-    			attr_dev(main1, "class", "bg-image svelte-nvinl6");
-    			set_style(main1, "--bg-img", "url(" + /*bgs*/ ctx[1][/*hovered*/ ctx[0] ? 1 : /*indexBg*/ ctx[2]] + ")");
-    			add_location(main1, file, 45, 0, 953);
+    			attr_dev(main, "class", "bg-dotted-grid svelte-rmmf34");
+    			add_location(main, file, 79, 1, 1745);
+    			attr_dev(canvas, "class", "bg-image svelte-rmmf34");
+    			attr_dev(canvas, "id", "bg-image");
+    			set_style(canvas, "--bg-img", "url(" + /*bgs*/ ctx[1][/*hovered*/ ctx[0] ? 1 : /*indexBg*/ ctx[2]] + ")");
+    			add_location(canvas, file, 78, 0, 1651);
     		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
     		},
     		m: function mount(target, anchor) {
-    			insert_dev(target, main1, anchor);
-    			append_dev(main1, main0);
-    			mount_component(fullpage, main0, null);
+    			insert_dev(target, canvas, anchor);
+    			append_dev(canvas, main);
+    			mount_component(fullpage, main, null);
     			current = true;
     		},
     		p: function update(ctx, [dirty]) {
@@ -3682,7 +4648,7 @@ var app = (function () {
     			fullpage.$set(fullpage_changes);
 
     			if (!current || dirty & /*hovered*/ 1) {
-    				set_style(main1, "--bg-img", "url(" + /*bgs*/ ctx[1][/*hovered*/ ctx[0] ? 1 : /*indexBg*/ ctx[2]] + ")");
+    				set_style(canvas, "--bg-img", "url(" + /*bgs*/ ctx[1][/*hovered*/ ctx[0] ? 1 : /*indexBg*/ ctx[2]] + ")");
     			}
     		},
     		i: function intro(local) {
@@ -3695,7 +4661,7 @@ var app = (function () {
     			current = false;
     		},
     		d: function destroy(detaching) {
-    			if (detaching) detach_dev(main1);
+    			if (detaching) detach_dev(canvas);
     			destroy_component(fullpage);
     		}
     	};
@@ -3721,6 +4687,20 @@ var app = (function () {
     	}
 
     	setContext('setHovered', setHovered);
+
+    	onMount(() => {
+    		new granim({
+    				element: '#bg-image',
+    				name: 'granim',
+    				opacity: [0.5, 0.5],
+    				states: {
+    					"default-state": {
+    						gradients: [['#834D9B', '#D04ED6'], ['#1CD8D2', '#93EDC7']]
+    					}
+    				}
+    			});
+    	});
+
     	const bgs = ['./assets/bgnonoise.png', './assets/bg.png'];
     	let indexBg = 0;
 
@@ -3745,6 +4725,8 @@ var app = (function () {
     		FullpageSlide,
     		Hero,
     		Skills,
+    		Granim: granim,
+    		onMount,
     		bgs,
     		indexBg,
     		sections,
